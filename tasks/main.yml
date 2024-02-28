@@ -1,0 +1,96 @@
+---
+- name: Include Database tasks
+  include_tasks: database.yml
+- name: Download Yarn key
+  ansible.builtin.get_url:
+    url: https://dl.yarnpkg.com/debian/pubkey.gpg
+    dest: /etc/apt/trusted.gpg.d/yarnkey.asc
+
+- name: Add Yarn repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/trusted.gpg.d/yarnkey.asc] https://dl.yarnpkg.com/debian/ stable main"
+    state: present
+    update_cache: true
+    filename: yarn
+
+- name: Install requred packages
+  ansible.builtin.apt:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - imagemagick
+    - ffmpeg
+    - libpq-dev
+    - libxml2-dev
+    - libxslt1-dev
+    - file
+    - git-core
+    - g++
+    - libprotobuf-dev
+    - protobuf-compiler
+    - pkg-config
+    - gcc
+    - autoconf
+    - bison
+    - build-essential
+    - libssl-dev
+    - libyaml-dev
+    - libreadline6-dev
+    - zlib1g-dev
+    - libncurses5-dev
+    - libffi-dev
+    - libgdbm-dev
+    - nginx
+    - redis-server
+    - redis-tools
+    - postgresql
+    - postgresql-contrib
+    - certbot
+    - python3-certbot-nginx
+    - libidn11-dev
+    - libicu-dev
+    - libjemalloc-dev
+    - bundler
+    - acl
+    - autopostgresqlbackup
+
+    # - node-webpack-cli
+
+
+- name: Install Node.js
+  ansible.builtin.include_role:
+    name: geerlingguy.nodejs
+
+- name: Enable Corepack
+  ansible.builtin.command: "corepack enable"
+
+- name: Yarn set classic
+  ansible.builtin.command: "yarn set version classic"
+
+- name: Create Mastodon user
+  ansible.builtin.user:
+    name: mastodon
+    shell: /bin/bash
+    home: /opt/mastodon
+    system: true
+    createhome: false
+
+- name: Create Mastodon directory
+  ansible.builtin.file:
+    path: /opt/
+    state: directory
+    owner: mastodon
+    group: mastodon
+    mode: 'uog=rwx'
+
+- name: Include mastodon tasks
+  include_tasks: mastodon.yml
+
+- name: Include Assets tasks
+  include_tasks: assets.yml
+
+- name: Include Systemd tasks
+  include_tasks: systemd.yml
+
+- name: Include Nginx tasks
+  include_tasks: nginx.yml

@@ -1,0 +1,4 @@
+---
+
+# Generate a secret key for Mastodon
+mastodon_db_password: "{{ lookup('password', '/dev/null length=6 chars=ascii_letters,digits') }}"

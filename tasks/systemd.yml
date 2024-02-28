@@ -1,0 +1,87 @@
+---
+- name: Check systemd services
+  ansible.builtin.service_facts:
+
+- name: Disable mastodon-streaming
+  systemd:
+    name: mastodon-streaming
+    enabled: false
+    state: stopped
+  register: stop_service
+  failed_when:
+    - stop_service.failed == true
+    - '"Could not find the requested service" not in stop_service.msg'
+
+- name: disable mastodon-sidekiq
+  systemd:
+    name: mastodon-sidekiq
+    enabled: false
+    state: stopped
+  register: stop_service
+  failed_when:
+    - stop_service.failed == true
+    - '"Could not find the requested service" not in stop_service.msg'
+
+- name: disable mastodon-web
+  systemd:
+    name: mastodon-web
+    enabled: false
+    state: stopped
+  register: stop_service
+  failed_when:
+    - stop_service.failed == true
+    - '"Could not find the requested service" not in stop_service.msg'
+
+- name: Deploy Mastodon systemd sidekiq service files
+  ansible.builtin.template:
+    src: "mastodon-sidekiq.service.j2"
+    dest: "/etc/systemd/system/mastodon-sidekiq.service"
+    owner: root
+    group: root
+    mode: "ugo=rw,go=r"
+
+- name: Deploy Mastodon systemd service files
+  ansible.builtin.template:
+    src: "mastodon-streaming.service.j2"
+    dest: "/etc/systemd/system/mastodon-streaming.service"
+    owner: root
+    group: root
+    mode: "ugo=rw,go=r"
+
+- name: Deploy Mastodon systemd straming@ service files
+  ansible.builtin.template:
+    src: "mastodon-streaming@.service.j2"
+    dest: "/etc/systemd/system/mastodon-streaming@.service"
+    owner: root
+    group: root
+    mode: "ugo=rw,go=r"
+
+- name: Deploy Mastodon systemd web service files
+  ansible.builtin.template:
+    src: "mastodon-web.service.j2"
+    dest: "/etc/systemd/system/mastodon-web.service"
+    owner: root
+    group: root
+    mode: "ugo=rw,go=r"
+
+- name: Enable Mastodon systemd services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+  with_items: 
+    - mastodon-sidekiq
+    - mastodon-streaming
+    - mastodon-web
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Start Mastodon systemd services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+  with_items: 
+    - mastodon-sidekiq
+    - mastodon-streaming
+    - mastodon-web

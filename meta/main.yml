@@ -1,0 +1,36 @@
+galaxy_info:
+  author: Vítězslav Dvořák
+  description: Install & Update & Configure mastodon server
+  company: vitexsoftware.com
+  role_name: mastodon_server
+  namespace: vitexus
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+
+  issue_tracker_url: https://github.com/Vitexus/mastodon-server/issues
+
+  license: MIT
+
+  min_ansible_version: '2.1'
+
+  galaxy_tags:
+    - mastodon
+    - social
+    - network
+    - server
+    - web
+    - ruby
+    - rails
+    - postgresql
+    - redis
+    - nginx
+
+dependencies:
+    - geerlingguy.postgresql
+    - geerlingguy.redis
+    - geerlingguy.nginx
+    - geerlingguy.ruby
+    - geerlingguy.nodejs
+    

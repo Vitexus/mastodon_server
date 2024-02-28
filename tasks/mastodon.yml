@@ -1,0 +1,48 @@
+---
+- name: Remove Mastodon directory
+  ansible.builtin.file:
+    path: /opt/mastodon
+    state: absent
+
+- block:
+    - name: Obtain latest Mastodon Release version
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/tootsuite/mastodon/releases/latest"
+        return_content: true
+      register: latest_mastodon_release
+
+    - name: "Clone Mastodon {{ latest_mastodon_release.json.tag_name }}"
+      ansible.builtin.git:
+        repo: "https://github.com/mastodon/mastodon.git"
+        dest: "/opt/mastodon"
+        version: "{{ latest_mastodon_release.json.tag_name }}"
+
+    - name: Create Mastodon configuration
+      ansible.builtin.template:
+        src: "mastodon.env.j2"
+        dest: "/opt/mastodon/.env.production"
+        owner: mastodon
+        group: mastodon
+        mode: "ugo=rw,go=r"
+
+  become_user: 'mastodon'
+  vars:
+    ansible_remote_tmp: /tmp/mastodon
+
+- name: Install gems using a Gemfile in another directory
+  community.general.bundler:
+    state: present
+    chdir: /opt/mastodon/
+    exclude_groups: development test
+    deployment_mode: true
+
+
+# - name: Check if Mastodon database
+
+
+# - name: Setup Mastodon database
+#   ansible.builtin.command: "bin/rails db:setup"
+#   args:
+#     chdir: /opt/mastodon
+#   environment:
+#     RAILS_ENV: production

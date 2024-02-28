@@ -1,0 +1,48 @@
+---
+- name: Prepare PostgreSQL
+  ansible.builtin.include_role:
+    name: geerlingguy.postgresql
+  vars:
+    postgresql_databases:
+      - name: mastodon_production
+        lc_collate: en_GB.UTF-8
+        lc_ctype: en_GB.UTF-8
+    postgresql_users:
+      - name: mastodon
+        password: "{{ mastodon_db_password }}"
+    postgresql_user_privileges:
+      - name: mastodon
+        db: mastodon_production
+        priv: ALL
+
+- name: Ensure Mastodon database user
+  community.postgresql.postgresql_user:
+    db: 'mastodon_production'
+    name: 'mastodon'
+    password: '{{ mastodon_db_password }}'
+  become_user: postgres
+
+- name: GRANT ALL PRIVILEGES ON DATABASE mastodon_production TO mastodon
+  community.postgresql.postgresql_privs:
+    db: mastodon_production
+    objs: ALL_DEFAULT
+    privs: ALL
+    type: default_privs
+    role: mastodon
+  become_user: postgres
+
+# - name: Check for postgresql major version number
+#   ansible.builtin.command: "psql --version"
+#   register: psql_version
+#   changed_when: false
+#   failed_when: false
+ 
+- name: Grant user access to databases
+  community.postgresql.postgresql_pg_hba:
+    dest: /etc/postgresql/15/main/pg_hba.conf
+    contype: host
+    users: mastodon
+    source: ::1
+    databases: mastodon_production
+    method: trust
+    create: true

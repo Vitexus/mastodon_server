@@ -1,0 +1,25 @@
+---
+- name: Setup Nginx
+  ansible.builtin.template:
+    src: "nginx.conf.j2"
+    dest: "/etc/nginx/sites-available/mastodon"
+    owner: root
+    group: root
+    mode: "ugo=rw,go=r"
+
+- name: Enable Nginx site
+  ansible.builtin.file:
+    src: "/etc/nginx/sites-available/mastodon"
+    dest: "/etc/nginx/sites-enabled/mastodon"
+    state: link
+
+- name: Remove default Nginx site
+  ansible.builtin.file:
+    path: "/etc/nginx/sites-enabled/default"
+    state: absent
+
+- name: Reload Nginx
+  ansible.builtin.service:
+    name: nginx
+    state: reloaded
+

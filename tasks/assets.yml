@@ -1,0 +1,34 @@
+---
+- name: Check for /usr/bin/yarn presence
+  ansible.builtin.stat:
+    path: /usr/bin/yarn
+  register: yarn_installed
+
+- name: Install yarn
+  community.general.npm:
+    name: yarn
+    global: true
+  when: not yarn_installed.stat.exists
+
+- name: Install Mastodon dependencies
+  ansible.builtin.command: "yarn install --pure-lockfile"
+  args:
+    chdir: /opt/mastodon
+  environment:
+    RAILS_ENV: production
+
+- name: Check if Mastodon assets are already installed
+  ansible.builtin.stat:
+    path:  /opt/mastodon/public/assets
+  register: mastodon_assets_installed
+
+- name: Precompile Mastodon assets
+  ansible.builtin.command: "bin/rails assets:precompile"
+  args:
+    chdir: /opt/mastodon
+  environment:
+    RAILS_ENV: production
+  when: not mastodon_assets_installed.stat.exists
+
+
+# bundle exec rails webpacker:install
