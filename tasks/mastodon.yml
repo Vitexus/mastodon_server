@@ -1,4 +1,11 @@
 ---
+- name: Check if Mastodon service exists
+  ansible.builtin.systemd:
+    name: mastodon-web
+    state: stopped
+    enabled: no
+  ignore_errors: true
+
 - name: Remove Mastodon directory
   ansible.builtin.file:
     path: /opt/mastodon
