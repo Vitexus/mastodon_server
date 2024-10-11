@@ -27,10 +27,9 @@ galaxy_info:
     - redis
     - nginx
 
-dependencies:
+  dependencies:
     - geerlingguy.postgresql
     - geerlingguy.redis
     - geerlingguy.nginx
     - geerlingguy.ruby
     - geerlingguy.nodejs
-    

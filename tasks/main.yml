@@ -53,13 +53,14 @@
     - bundler
     - acl
     - autopostgresqlbackup
+    - node-corepack
 
     # - node-webpack-cli
 
 
-- name: Install Node.js
-  ansible.builtin.include_role:
-    name: geerlingguy.nodejs
+# - name: Install Node.js
+#   ansible.builtin.include_role:
+#     name: geerlingguy.nodejs
 
 - name: Enable Corepack
   ansible.builtin.command: "corepack enable"

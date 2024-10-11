@@ -22,13 +22,42 @@
     path:  /opt/mastodon/public/assets
   register: mastodon_assets_installed
 
+- name: Generate new secrets for Active Record encryption
+  ansible.builtin.command: "bin/rails db:encryption:init"
+  args:
+    chdir: /opt/mastodon
+  environment:
+    RAILS_ENV: production
+
+- name: Set ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY
+  ansible.builtin.shell: "echo 'export ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY=$(bin/rails credentials:show | grep active_record_encryption_deterministic_key)'"
+  register: active_record_encryption_deterministic_key
+
+- name: Set ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT
+  ansible.builtin.shell: "echo 'export ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT=$(bin/rails credentials:show | grep active_record_encryption_key_derivation_salt)'"
+  register: active_record_encryption_key_derivation_salt
+
+- name: Set ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY
+  ansible.builtin.shell: "echo 'export ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY=$(bin/rails credentials:show | grep active_record_encryption_primary_key)'"
+  register: active_record_encryption_primary_key
+
+- name: Npm install
+  ansible.builtin.command: "npm install"
+  args:
+    chdir: /opt/mastodon
+  environment:
+    RAILS_ENV: production
+
 - name: Precompile Mastodon assets
   ansible.builtin.command: "bin/rails assets:precompile"
   args:
     chdir: /opt/mastodon
   environment:
     RAILS_ENV: production
+    YARN_IGNORE_NODE: '1'
+    ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY: "{{ active_record_encryption_deterministic_key.stdout }}"
+    ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT: "{{ active_record_encryption_key_derivation_salt.stdout }}"
+    ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY: "{{ active_record_encryption_primary_key.stdout }}"
   when: not mastodon_assets_installed.stat.exists
-
 
 # bundle exec rails webpacker:install
