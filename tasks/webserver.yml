@@ -1,0 +1,100 @@
+---
+# Conditional webserver configuration for Mastodon
+# Supports both Nginx and Apache webservers
+
+- name: Configure Nginx webserver
+  block:
+    - name: Setup Nginx configuration
+      ansible.builtin.template:
+        src: "nginx.conf.j2"
+        dest: "/etc/nginx/sites-available/mastodon"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload nginx
+
+    - name: Enable Nginx site
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/mastodon"
+        dest: "/etc/nginx/sites-enabled/mastodon"
+        state: link
+      notify: reload nginx
+
+    - name: Remove default Nginx site
+      ansible.builtin.file:
+        path: "/etc/nginx/sites-enabled/default"
+        state: absent
+      notify: reload nginx
+
+    - name: Ensure Nginx is running and enabled
+      ansible.builtin.service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Test Nginx configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+  when: mastodon_webserver == "nginx"
+
+- name: Configure Apache webserver
+  block:
+    - name: Disable Apache site if it exists
+      ansible.builtin.command: a2dissite {{ mastodon_domain }}
+      ignore_errors: true
+
+    - name: Enable required Apache modules
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rewrite
+        - proxy
+        - proxy_http
+        - proxy_wstunnel
+        - headers
+        - deflate
+        - ssl
+        - env
+        - setenvif
+      notify: restart apache
+
+    - name: Setup Apache virtual host
+      ansible.builtin.template:
+        src: "apache.conf.j2"
+        dest: "/etc/apache2/sites-available/{{ mastodon_domain }}.conf"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload apache
+
+    - name: Enable Apache site
+      ansible.builtin.command: a2ensite {{ mastodon_domain }}
+      args:
+        creates: "/etc/apache2/sites-enabled/{{ mastodon_domain }}.conf"
+      notify: reload apache
+
+    - name: Disable default Apache site
+      ansible.builtin.command: a2dissite 000-default
+      args:
+        removes: "/etc/apache2/sites-enabled/000-default.conf"
+      notify: reload apache
+      ignore_errors: true  # In case it's already disabled
+
+    - name: Ensure Apache is running and enabled
+      ansible.builtin.service:
+        name: apache2
+        state: started
+        enabled: true
+
+    - name: Test Apache configuration
+      ansible.builtin.command: apache2ctl configtest
+      changed_when: false
+
+  when: mastodon_webserver == "apache"
+
+- name: Fail if webserver is not supported
+  ansible.builtin.fail:
+    msg: "Unsupported webserver: {{ mastodon_webserver }}. Only 'nginx' and 'apache' are supported."
+  when: mastodon_webserver not in ['nginx', 'apache']

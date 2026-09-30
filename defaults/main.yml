@@ -2,3 +2,37 @@
 
 # Generate a secret key for Mastodon
 mastodon_db_password: "{{ lookup('password', '/dev/null length=6 chars=ascii_letters,digits') }}"
+
+# Mastodon application settings
+mastodon_port: 3000  # Default port for Mastodon web interface
+
+# Webserver configuration
+mastodon_webserver: "nginx"  # Options: "nginx" or "apache"
+mastodon_enable_ssl: false   # Set to true to enable SSL configuration
+
+# Webserver-specific package mapping
+mastodon_webserver_package: "{{ 'nginx' if mastodon_webserver == 'nginx' else 'apache2' }}"
+
+# SSL certificate paths (used when mastodon_enable_ssl is true)
+mastodon_ssl_cert_path: "/etc/letsencrypt/live/{{ mastodon_domain }}/fullchain.pem"
+mastodon_ssl_key_path: "/etc/letsencrypt/live/{{ mastodon_domain }}/privkey.pem"
+
+# Admin user configuration
+# Set mastodon_admin_email to create an admin user automatically
+mastodon_admin_email: ""  # Example: "admin@{{ mastodon_domain }}"
+mastodon_admin_username: "admin"  # Default admin username
+mastodon_admin_password: ""  # Leave empty to auto-generate secure password
+mastodon_admin_confirmed: true  # Auto-confirm admin account
+mastodon_admin_approved: true   # Auto-approve admin account
+
+# Elasticsearch configuration for search functionality
+mastodon_enable_elasticsearch: true  # Enable Elasticsearch for full-text search
+mastodon_elasticsearch_host: "localhost"
+mastodon_elasticsearch_port: 9200
+
+# Mastodon version to install (e.g. "v4.7.2").
+# Leave undefined or empty to resolve the latest GitHub release on each run.
+mastodon_version: ""
+
+# Maximum character length for a status/toot (upstream default is 500)
+mastodon_max_toot_chars: 500

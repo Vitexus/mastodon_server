@@ -4,7 +4,7 @@
     name: geerlingguy.postgresql
   vars:
     postgresql_databases:
-      - name: mastodon_production
+      - name: "{{ mastodon_db_name | default('mastodon_production') }}"
         lc_collate: en_GB.UTF-8
         lc_ctype: en_GB.UTF-8
     postgresql_users:
@@ -12,37 +12,56 @@
         password: "{{ mastodon_db_password }}"
     postgresql_user_privileges:
       - name: mastodon
-        db: mastodon_production
+        db: "{{ mastodon_db_name | default('mastodon_production') }}"
         priv: ALL
 
 - name: Ensure Mastodon database user
   community.postgresql.postgresql_user:
-    db: 'mastodon_production'
+    db: "{{ mastodon_db_name | default('mastodon_production') }}"
     name: 'mastodon'
     password: '{{ mastodon_db_password }}'
   become_user: postgres
 
-- name: GRANT ALL PRIVILEGES ON DATABASE mastodon_production TO mastodon
+- name: GRANT ALL PRIVILEGES ON DATABASE to mastodon
   community.postgresql.postgresql_privs:
-    db: mastodon_production
+    db: "{{ mastodon_db_name | default('mastodon_production') }}"
     objs: ALL_DEFAULT
     privs: ALL
     type: default_privs
     role: mastodon
   become_user: postgres
 
-# - name: Check for postgresql major version number
-#   ansible.builtin.command: "psql --version"
-#   register: psql_version
-#   changed_when: false
-#   failed_when: false
- 
+- name: Get PostgreSQL version
+  ansible.builtin.shell: |
+    psql --version | grep -oP '\d+\.\d+' | head -1 | cut -d'.' -f1
+  register: postgres_version
+  changed_when: false
+  become_user: postgres
+
 - name: Grant user access to databases
   community.postgresql.postgresql_pg_hba:
-    dest: /etc/postgresql/15/main/pg_hba.conf
+    dest: "/etc/postgresql/{{ postgres_version.stdout }}/main/pg_hba.conf"
     contype: host
     users: mastodon
-    source: ::1
-    databases: mastodon_production
+    source: '::1/128'
+    databases: "{{ mastodon_db_name | default('mastodon_production') }}"
     method: trust
     create: true
+
+- name: Grant CREATE privileges on public schema
+  community.postgresql.postgresql_privs:
+    db: "{{ mastodon_db_name | default('mastodon_production') }}"
+    objs: public
+    privs: CREATE
+    type: schema
+    role: mastodon
+  become_user: postgres
+
+- name: Grant USAGE privileges on public schema
+  community.postgresql.postgresql_privs:
+    db: "{{ mastodon_db_name | default('mastodon_production') }}"
+    objs: public
+    privs: USAGE
+    type: schema
+    role: mastodon
+  become_user: postgres

@@ -10,6 +10,7 @@ Environment="RAILS_ENV=production"
 Environment="DB_POOL=25"
 Environment="MALLOC_ARENA_MAX=2"
 Environment="LD_PRELOAD=libjemalloc.so"
+Environment="LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
 ExecStart=bundle exec sidekiq -c 25
 TimeoutSec=15
 Restart=always

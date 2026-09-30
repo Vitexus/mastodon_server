@@ -11,6 +11,7 @@ User=mastodon
 WorkingDirectory=/opt/mastodon
 Environment="NODE_ENV=production"
 Environment="PORT=%i"
+Environment="LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
 ExecStart=/usr/bin/node ./streaming
 TimeoutSec=15
 Restart=always

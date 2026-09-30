@@ -1,0 +1,119 @@
+---
+# Admin User Creation Tasks for Mastodon
+
+- name: Generate admin password if not provided
+  ansible.builtin.set_fact:
+    mastodon_admin_password_generated: "{{ lookup('password', '/dev/null length=20 chars=ascii_letters,digits') }}"
+  when: mastodon_admin_password == ""
+
+- name: Set admin password (use provided or generated)
+  ansible.builtin.set_fact:
+    mastodon_admin_password_final: "{{ mastodon_admin_password if mastodon_admin_password != '' else mastodon_admin_password_generated }}"
+
+- name: Check if admin user already exists
+  ansible.builtin.shell: |
+    cd /opt/mastodon
+    sudo -u mastodon RAILS_ENV=production bin/rails runner "
+    user = User.find_by(email: '{{ mastodon_admin_email }}')
+    if user
+      puts 'EXISTS'
+    else
+      puts 'NOT_FOUND'
+    end
+    "
+  register: admin_user_check
+  changed_when: false
+  failed_when: false
+
+- name: Create admin user account
+  ansible.builtin.shell: |
+    cd /opt/mastodon
+    sudo -u mastodon RAILS_ENV=production bin/rails runner "
+    user = User.create!(
+      email: '{{ mastodon_admin_email }}',
+      password: '{{ mastodon_admin_password_final }}',
+      password_confirmation: '{{ mastodon_admin_password_final }}',
+      confirmed_at: {{ 'Time.current' if mastodon_admin_confirmed else 'nil' }},
+      approved: {{ mastodon_admin_approved | lower }},
+      role_id: nil
+    )
+    
+    account = Account.create!(
+      username: '{{ mastodon_admin_username }}',
+      domain: nil
+    )
+    
+    user.account = account
+    user.save!
+    
+    puts \"User created: #{user.email} with username: #{account.username}\"
+    "
+  register: admin_user_creation
+  when: admin_user_check.stdout.strip() == "NOT_FOUND"
+
+- name: Assign admin role to user
+  ansible.builtin.shell: |
+    cd /opt/mastodon
+    sudo -u mastodon RAILS_ENV=production bin/rails runner "
+    user = User.find_by(email: '{{ mastodon_admin_email }}')
+    admin_role = UserRole.find_by(name: 'Admin') || UserRole.find_by(name: 'Owner')
+    
+    if admin_role.nil?
+      admin_role = UserRole.create!(
+        name: 'Admin',
+        color: '#e74c3c',
+        permissions: 2097151,  # All permissions
+        highlighted: true,
+        position: 1
+      )
+      puts \"Created Admin role with permissions: #{admin_role.permissions}\"
+    end
+    
+    if user && admin_role
+      user.role = admin_role
+      user.save!
+      puts \"Assigned Admin role to #{user.email}\"
+      puts \"User permissions: #{admin_role.permissions}\"
+    else
+      puts \"ERROR: User or Admin role not found\"
+      exit 1
+    end
+    "
+  register: admin_role_assignment
+  when: admin_user_check.stdout.strip() == "NOT_FOUND" or admin_user_creation is succeeded
+
+- name: Display admin user credentials
+  ansible.builtin.debug:
+    msg: |
+      ====================================
+      🎉 MASTODON ADMIN USER CREATED
+      ====================================
+      Email:    {{ mastodon_admin_email }}
+      Username: {{ mastodon_admin_username }}
+      Password: {{ mastodon_admin_password_final }}
+      Domain:   {{ mastodon_domain }}
+      ====================================
+      ⚠️  SAVE THESE CREDENTIALS SECURELY!
+      ====================================
+      Access your admin panel at:
+      https://{{ mastodon_domain }}/admin
+      ====================================
+  when: admin_user_check.stdout.strip() == "NOT_FOUND" or admin_user_creation is succeeded
+
+- name: Save admin credentials to file
+  ansible.builtin.copy:
+    content: |
+      # Mastodon Admin Credentials
+      # Generated on: {{ ansible_date_time.iso8601 }}
+      # 
+      MASTODON_ADMIN_EMAIL={{ mastodon_admin_email }}
+      MASTODON_ADMIN_USERNAME={{ mastodon_admin_username }}
+      MASTODON_ADMIN_PASSWORD={{ mastodon_admin_password_final }}
+      MASTODON_ADMIN_URL=https://{{ mastodon_domain }}/admin
+      #
+      # ⚠️  Keep this file secure and delete it after noting down credentials
+    dest: "/opt/mastodon/.admin_credentials"
+    owner: mastodon
+    group: mastodon
+    mode: '0600'
+  when: admin_user_check.stdout.strip() == "NOT_FOUND" or admin_user_creation is succeeded
