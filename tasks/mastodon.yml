@@ -138,13 +138,37 @@
       when: existing_env.content is defined
       no_log: true
 
+    # Secrets are never stored in the repository: use explicitly supplied
+    # variables (vault), else the values already in .env.production, else
+    # generate fresh ones on first install.
+    - name: Resolve instance secrets
+      ansible.builtin.set_fact:
+        mastodon_secret_key_base: >-
+          {{ mastodon_secret_key_base | default(
+               ((existing_env.content | default('') | b64decode) | regex_findall('(?m)^SECRET_KEY_BASE=(\\S+)') | first)
+               | default(lookup('ansible.builtin.password', '/dev/null length=128 chars=hexdigits'), true), true) }}
+        mastodon_otp_secret: >-
+          {{ mastodon_otp_secret | default(
+               ((existing_env.content | default('') | b64decode) | regex_findall('(?m)^OTP_SECRET=(\\S+)') | first)
+               | default(lookup('ansible.builtin.password', '/dev/null length=128 chars=hexdigits'), true), true) }}
+        mastodon_vapid_private_key: >-
+          {{ mastodon_vapid_private_key | default(
+               ((existing_env.content | default('') | b64decode) | regex_findall('(?m)^VAPID_PRIVATE_KEY=(\\S+)') | first)
+               | default('', true), true) }}
+        mastodon_vapid_public_key: >-
+          {{ mastodon_vapid_public_key | default(
+               ((existing_env.content | default('') | b64decode) | regex_findall('(?m)^VAPID_PUBLIC_KEY=(\\S+)') | first)
+               | default('', true), true) }}
+      no_log: true
+
     - name: Create Mastodon configuration
       ansible.builtin.template:
         src: "mastodon.env.j2"
         dest: "/opt/mastodon/.env.production"
         owner: mastodon
         group: mastodon
-        mode: "ugo=rw,go=r"
+        mode: "u=rw,g=r,o="
+      no_log: true
 
     - name: Configure bundle settings
       ansible.builtin.command: "{{ item }}"
@@ -200,8 +224,37 @@
     dest: "/opt/mastodon/.env.production"
     owner: mastodon
     group: mastodon
-    mode: "ugo=rw,go=r"
+    mode: "u=rw,g=r,o="
   when: encryption_keys_exist.rc != 0
+  no_log: true
+
+- name: Generate VAPID keys
+  ansible.builtin.command: "bin/rails mastodon:webpush:generate_vapid_key"
+  args:
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    RAILS_ENV: production
+  register: vapid_keys_output
+  no_log: true
+  when: mastodon_vapid_private_key | default('') | length == 0
+
+- name: Parse VAPID keys
+  ansible.builtin.set_fact:
+    mastodon_vapid_private_key: "{{ vapid_keys_output.stdout | regex_search('VAPID_PRIVATE_KEY=(\\S+)', '\\1') | first }}"
+    mastodon_vapid_public_key: "{{ vapid_keys_output.stdout | regex_search('VAPID_PUBLIC_KEY=(\\S+)', '\\1') | first }}"
+  when: mastodon_vapid_private_key | default('') | length == 0
+  no_log: true
+
+- name: Update Mastodon configuration with VAPID keys
+  ansible.builtin.template:
+    src: "mastodon.env.j2"
+    dest: "/opt/mastodon/.env.production"
+    owner: mastodon
+    group: mastodon
+    mode: "u=rw,g=r,o="
+  when: vapid_keys_output is changed
+  no_log: true
 
 - name: Read packageManager version from package.json
   ansible.builtin.command: >
