@@ -1,6 +1,18 @@
 ---
+- name: Remove conflicting NodeSource APT source files before any apt operations
+  ansible.builtin.shell: |
+    find /etc/apt/sources.list.d/ -name '*nodesource*' -o -name '*node_1[0-9]*' -o -name 'nodesource*' | xargs rm -f
+    rm -f /etc/apt/trusted.gpg.d/nodesource.gpg
+    rm -f /usr/share/keyrings/nodesource.gpg
+    rm -f /etc/apt/signing-key-nodesource-repo.asc
+  changed_when: false
+
+- name: Update apt cache after NodeSource cleanup
+  ansible.builtin.apt:
+    update_cache: true
+
 - name: Include Database tasks
-  include_tasks: database.yml
+  ansible.builtin.include_tasks: database.yml
 - name: Download Yarn key
   ansible.builtin.get_url:
     url: https://dl.yarnpkg.com/debian/pubkey.gpg
@@ -40,33 +52,97 @@
     - libncurses5-dev
     - libffi-dev
     - libgdbm-dev
-    - nginx
+    - "{{ mastodon_webserver_package }}"
     - redis-server
     - redis-tools
     - postgresql
     - postgresql-contrib
     - certbot
-    - python3-certbot-nginx
+    - "{{ 'python3-certbot-nginx' if mastodon_webserver == 'nginx' else 'python3-certbot-apache' }}"
     - libidn11-dev
+    - libvips-dev
+    - libvips42
     - libicu-dev
     - libjemalloc-dev
+    - libvips-dev
+    - libvips-tools
     - bundler
     - acl
     - autopostgresqlbackup
-    - node-corepack
+    - yarn
 
     # - node-webpack-cli
 
 
-# - name: Install Node.js
-#   ansible.builtin.include_role:
-#     name: geerlingguy.nodejs
+- name: Check if Node.js is installed
+  ansible.builtin.command: node --version
+  register: node_version
+  changed_when: false
+  failed_when: false
+
+- name: Check if npm is available
+  ansible.builtin.command: which npm
+  register: npm_check
+  changed_when: false
+  failed_when: false
+
+- name: Set Node.js needs upgrade flag
+  ansible.builtin.set_fact:
+    nodejs_needs_upgrade: "{{ node_version.rc != 0 or not (node_version.stdout | regex_search('v2[0-9]\\.')) or npm_check.rc != 0 }}"
+
+- name: Remove existing Node.js packages that conflict
+  ansible.builtin.apt:
+    name:
+      - libnode115
+      - node-acorn
+      - node-corepack
+      - nodejs-doc
+      - nodejs
+      - libcares2
+      - node-balanced-match
+      - node-brace-expansion
+      - node-cjs-module-lexer
+      - node-minimatch
+      - node-undici
+      - node-xtend
+    state: absent
+    autoremove: true
+    autoclean: true
+  when: nodejs_needs_upgrade
+
+- name: Remove conflicting NodeSource APT source files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/nodesource.list
+    - /etc/apt/trusted.gpg.d/nodesource.gpg
+    - /usr/share/keyrings/nodesource.gpg
+    - /etc/apt/signing-key-nodesource-repo.asc
+  when: nodejs_needs_upgrade
+
+- name: Update apt cache after Node.js removal
+  ansible.builtin.apt:
+    update_cache: true
+  when: nodejs_needs_upgrade
+
+- name: Set up NodeSource Node.js 20.x repository
+  ansible.builtin.shell: |
+    curl -fsSL https://deb.nodesource.com/setup_20.x -o /tmp/nodesource_setup.sh
+    bash /tmp/nodesource_setup.sh
+  when: nodejs_needs_upgrade
+
+- name: Install Node.js 20.x if not present, version is too old, or npm is missing
+  ansible.builtin.apt:
+    name: nodejs
+    state: present
+    update_cache: true
+  when: nodejs_needs_upgrade
 
 - name: Enable Corepack
   ansible.builtin.command: "corepack enable"
-
-- name: Yarn set classic
-  ansible.builtin.command: "yarn set version classic"
+  environment:
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
 
 - name: Create Mastodon user
   ansible.builtin.user:
@@ -78,20 +154,40 @@
 
 - name: Create Mastodon directory
   ansible.builtin.file:
-    path: /opt/
+    path: /opt/mastodon
     state: directory
     owner: mastodon
     group: mastodon
-    mode: 'uog=rwx'
+    mode: '0755'
+
+- name: Include Elasticsearch tasks
+  ansible.builtin.include_tasks: elasticsearch.yml
+  when: mastodon_enable_elasticsearch | default(true)
 
 - name: Include mastodon tasks
-  include_tasks: mastodon.yml
+  ansible.builtin.include_tasks: mastodon.yml
 
 - name: Include Assets tasks
-  include_tasks: assets.yml
+  ansible.builtin.include_tasks: assets.yml
 
 - name: Include Systemd tasks
-  include_tasks: systemd.yml
+  ansible.builtin.include_tasks: systemd.yml
 
-- name: Include Nginx tasks
-  include_tasks: nginx.yml
+- name: Include Webserver tasks
+  ansible.builtin.include_tasks: webserver.yml
+
+- name: Include Admin tasks
+  ansible.builtin.include_tasks: admin.yml
+  when: mastodon_admin_email != ""
+
+- name: Deploy Elasticsearch search indexes
+  ansible.builtin.command:
+    cmd: >-
+      bin/tootctl search deploy
+      --only=instances accounts tags statuses public_statuses
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    RAILS_ENV: production
+    LD_LIBRARY_PATH: /lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu
+  when: mastodon_enable_elasticsearch | default(true)

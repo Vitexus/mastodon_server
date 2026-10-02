@@ -1,2 +1,27 @@
 ---
-# handlers file for mastodon-server
+# Handlers for Mastodon webserver services
+
+- name: reload nginx
+  ansible.builtin.service:
+    name: nginx
+    state: reloaded
+
+- name: restart nginx
+  ansible.builtin.service:
+    name: nginx
+    state: restarted
+
+- name: reload apache
+  ansible.builtin.service:
+    name: apache2
+    state: reloaded
+
+- name: restart apache
+  ansible.builtin.service:
+    name: apache2
+    state: restarted
+
+- name: restart elasticsearch
+  ansible.builtin.service:
+    name: elasticsearch
+    state: restarted

@@ -1,28 +1,165 @@
 ---
-- name: Check if Mastodon service exists
-  ansible.builtin.systemd:
-    name: mastodon-web
-    state: stopped
-    enabled: no
-  ignore_errors: true
+- name: Check if Mastodon directory exists
+  ansible.builtin.stat:
+    path: /opt/mastodon/.git
+  register: mastodon_git_stat
 
-- name: Remove Mastodon directory
+- name: Check if Mastodon directory is a mount point
+  ansible.builtin.command: findmnt /opt/mastodon
+  register: mastodon_mount_check
+  changed_when: false
+  failed_when: false
+
+- name: Set Mastodon is mounted flag
+  ansible.builtin.set_fact:
+    mastodon_is_mounted: "{{ mastodon_mount_check.rc == 0 }}"
+    mastodon_is_installed: "{{ mastodon_git_stat.stat.exists }}"
+
+- name: Stop Mastodon services before upgrade
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - mastodon-web
+    - mastodon-sidekiq
+    - mastodon-streaming
+  failed_when: false
+  when: mastodon_is_installed
+
+- name: Obtain latest Mastodon Release version
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/mastodon/mastodon/releases/latest"
+    return_content: true
+  register: latest_mastodon_release
+  when: (mastodon_version | default('')) | length == 0
+
+- name: Set resolved Mastodon version
+  ansible.builtin.set_fact:
+    mastodon_resolved_version: >-
+      {{ mastodon_version
+         if ((mastodon_version | default('')) | length) > 0
+         else latest_mastodon_release.json.tag_name }}
+
+- name: Create Mastodon directory with proper ownership (fresh install only)
   ansible.builtin.file:
     path: /opt/mastodon
-    state: absent
+    state: directory
+    owner: mastodon
+    group: mastodon
+    mode: '0755'
+  when: not mastodon_is_installed and not mastodon_is_mounted
 
 - block:
-    - name: Obtain latest Mastodon Release version
-      ansible.builtin.uri:
-        url: "https://api.github.com/repos/tootsuite/mastodon/releases/latest"
-        return_content: true
-      register: latest_mastodon_release
-
-    - name: "Clone Mastodon {{ latest_mastodon_release.json.tag_name }}"
+    - name: "Clone Mastodon {{ mastodon_resolved_version }} (fresh install)"
       ansible.builtin.git:
         repo: "https://github.com/mastodon/mastodon.git"
         dest: "/opt/mastodon"
-        version: "{{ latest_mastodon_release.json.tag_name }}"
+        version: "{{ mastodon_resolved_version }}"
+      become: true
+      when: not mastodon_is_installed
+
+    - name: "Fetch Mastodon {{ mastodon_resolved_version }} (in-place upgrade)"
+      ansible.builtin.git:
+        repo: "https://github.com/mastodon/mastodon.git"
+        dest: "/opt/mastodon"
+        version: "{{ mastodon_resolved_version }}"
+        force: true
+      become: true
+      when: mastodon_is_installed
+
+    - name: Ensure Mastodon owns application files (exclude media)
+      ansible.builtin.command:
+        argv:
+          - find
+          - /opt/mastodon
+          - -path
+          - /opt/mastodon/public/system
+          - -prune
+          - -o
+          - (
+          - !
+          - -user
+          - mastodon
+          - -o
+          - !
+          - -group
+          - mastodon
+          - )
+          - -exec
+          - chown
+          - mastodon:mastodon
+          - '{}'
+          - +
+      register: mastodon_chown
+      # find returns 0 even when nothing needed changing; treat as ok
+      changed_when: false
+      failed_when: mastodon_chown.rc not in [0, 1]
+      become: true
+
+    - name: Ensure public/system exists for media files
+      ansible.builtin.file:
+        path: /opt/mastodon/public/system
+        state: directory
+        owner: mastodon
+        group: mastodon
+        mode: '0755'
+      # Do not recurse — media tree can be tens of GB
+
+    - name: Configure Rails SSL settings based on mastodon_enable_ssl
+      ansible.builtin.replace:
+        path: /opt/mastodon/config/environments/production.rb
+        regexp: '^  config\.force_ssl = true$'
+        replace: "  config.force_ssl = Rails.env.production? && ENV['RAILS_FORCE_SSL'] != 'false'"
+        backup: true
+      become: true
+
+    - name: Configure Mastodon max toot character limit
+      ansible.builtin.replace:
+        path: /opt/mastodon/app/validators/status_length_validator.rb
+        regexp: '^  MAX_CHARS = \d+$'
+        replace: "  MAX_CHARS = {{ mastodon_max_toot_chars }}"
+        backup: true
+      become: true
+
+    - name: Read existing Active Record encryption keys
+      ansible.builtin.slurp:
+        src: /opt/mastodon/.env.production
+      register: existing_env
+      failed_when: false
+      no_log: true
+
+    # Keys must survive re-renders of .env.production: rotating them makes all
+    # already-encrypted data undecryptable (Decryption / AuthTagError -> HTTP 500).
+    - name: Preserve existing Active Record encryption keys
+      ansible.builtin.set_fact:
+        deterministic_key: "{{ (existing_env.content | b64decode) | regex_findall('(?m)^ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY=(\\S+)') }}"
+        key_derivation_salt: "{{ (existing_env.content | b64decode) | regex_findall('(?m)^ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT=(\\S+)') }}"
+        primary_key: "{{ (existing_env.content | b64decode) | regex_findall('(?m)^ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY=(\\S+)') }}"
+      when: existing_env.content is defined
+      no_log: true
+
+    # Secrets are never stored in the repository: use explicitly supplied
+    # variables (vault), else the values already in .env.production, else
+    # generate fresh ones on first install.
+    - name: Resolve instance secrets
+      ansible.builtin.set_fact:
+        mastodon_secret_key_base: >-
+          {{ mastodon_secret_key_base | default(
+               ((existing_env.content | default('') | b64decode) | regex_findall('(?m)^SECRET_KEY_BASE=(\\S+)') | first)
+               | default(lookup('ansible.builtin.password', '/dev/null length=128 chars=hexdigits'), true), true) }}
+        mastodon_otp_secret: >-
+          {{ mastodon_otp_secret | default(
+               ((existing_env.content | default('') | b64decode) | regex_findall('(?m)^OTP_SECRET=(\\S+)') | first)
+               | default(lookup('ansible.builtin.password', '/dev/null length=128 chars=hexdigits'), true), true) }}
+        mastodon_vapid_private_key: >-
+          {{ mastodon_vapid_private_key | default(
+               ((existing_env.content | default('') | b64decode) | regex_findall('(?m)^VAPID_PRIVATE_KEY=(\\S+)') | first)
+               | default('', true), true) }}
+        mastodon_vapid_public_key: >-
+          {{ mastodon_vapid_public_key | default(
+               ((existing_env.content | default('') | b64decode) | regex_findall('(?m)^VAPID_PUBLIC_KEY=(\\S+)') | first)
+               | default('', true), true) }}
+      no_log: true
 
     - name: Create Mastodon configuration
       ansible.builtin.template:
@@ -30,26 +167,198 @@
         dest: "/opt/mastodon/.env.production"
         owner: mastodon
         group: mastodon
-        mode: "ugo=rw,go=r"
+        mode: "u=rw,g=r,o="
+      no_log: true
+
+    - name: Configure bundle settings
+      ansible.builtin.command: "{{ item }}"
+      args:
+        chdir: /opt/mastodon
+        creates: /opt/mastodon/.bundle/config
+      with_items:
+        - "bundle config set deployment true"
+        - "bundle config set without 'development test'"
+
+    - name: Install gems using bundler
+      ansible.builtin.command: "bundle install"
+      args:
+        chdir: /opt/mastodon
+      environment:
+        RAILS_ENV: production
+      register: bundle_result
+      changed_when: "'Installing' in bundle_result.stdout or 'Updating' in bundle_result.stdout"
 
   become_user: 'mastodon'
   vars:
     ansible_remote_tmp: /tmp/mastodon
 
-- name: Install gems using a Gemfile in another directory
-  community.general.bundler:
-    state: present
-    chdir: /opt/mastodon/
-    exclude_groups: development test
-    deployment_mode: true
 
+- name: Check if encryption keys already exist in config
+  ansible.builtin.command: "grep -q 'ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY' /opt/mastodon/.env.production"
+  register: encryption_keys_exist
+  failed_when: false
+  changed_when: false
 
-# - name: Check if Mastodon database
+- name: Generate Active Record encryption keys
+  ansible.builtin.command: "bin/rails db:encryption:init"
+  args:
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    RAILS_ENV: production
+  register: encryption_keys_output
+  no_log: true
+  when: encryption_keys_exist.rc != 0
 
+- name: Parse encryption keys
+  ansible.builtin.set_fact:
+    deterministic_key: "{{ encryption_keys_output.stdout | regex_findall('ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY=([A-Za-z0-9]+)') }}"
+    key_derivation_salt: "{{ encryption_keys_output.stdout | regex_findall('ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT=([A-Za-z0-9]+)') }}"
+    primary_key: "{{ encryption_keys_output.stdout | regex_findall('ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY=([A-Za-z0-9]+)') }}"
+  when: encryption_keys_exist.rc != 0
+  no_log: true
 
-# - name: Setup Mastodon database
-#   ansible.builtin.command: "bin/rails db:setup"
-#   args:
-#     chdir: /opt/mastodon
-#   environment:
-#     RAILS_ENV: production
+- name: Update Mastodon configuration with encryption keys
+  ansible.builtin.template:
+    src: "mastodon.env.j2"
+    dest: "/opt/mastodon/.env.production"
+    owner: mastodon
+    group: mastodon
+    mode: "u=rw,g=r,o="
+  when: encryption_keys_exist.rc != 0
+  no_log: true
+
+- name: Generate VAPID keys
+  ansible.builtin.command: "bin/rails mastodon:webpush:generate_vapid_key"
+  args:
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    RAILS_ENV: production
+  register: vapid_keys_output
+  no_log: true
+  when: mastodon_vapid_private_key | default('') | length == 0
+
+- name: Parse VAPID keys
+  ansible.builtin.set_fact:
+    mastodon_vapid_private_key: "{{ vapid_keys_output.stdout | regex_search('VAPID_PRIVATE_KEY=(\\S+)', '\\1') | first }}"
+    mastodon_vapid_public_key: "{{ vapid_keys_output.stdout | regex_search('VAPID_PUBLIC_KEY=(\\S+)', '\\1') | first }}"
+  when: mastodon_vapid_private_key | default('') | length == 0
+  no_log: true
+
+- name: Update Mastodon configuration with VAPID keys
+  ansible.builtin.template:
+    src: "mastodon.env.j2"
+    dest: "/opt/mastodon/.env.production"
+    owner: mastodon
+    group: mastodon
+    mode: "u=rw,g=r,o="
+  when: vapid_keys_output is changed
+  no_log: true
+
+- name: Read packageManager version from package.json
+  ansible.builtin.command: >
+    node -e "const p=require('./package.json'); const pm=p.packageManager||''; const m=pm.match(/yarn@([\d.]+)/); console.log(m?m[1]:'')"
+  args:
+    chdir: /opt/mastodon
+  register: yarn_pkg_version
+  changed_when: false
+  failed_when: false
+
+- name: Download Yarn release binary directly (bypasses corepack interactive prompt)
+  ansible.builtin.get_url:
+    url: "https://repo.yarnpkg.com/{{ yarn_pkg_version.stdout | trim }}/packages/yarnpkg-cli/bin/yarn.js"
+    dest: "/opt/mastodon/.yarn/releases/yarn-{{ yarn_pkg_version.stdout | trim }}.cjs"
+    owner: mastodon
+    group: mastodon
+    mode: '0644'
+  when: yarn_pkg_version.stdout | trim != ""
+  become: true
+
+- name: Set yarnPath in .yarnrc.yml to use local binary
+  ansible.builtin.lineinfile:
+    path: /opt/mastodon/.yarnrc.yml
+    regexp: '^yarnPath:'
+    line: "yarnPath: .yarn/releases/yarn-{{ yarn_pkg_version.stdout | trim }}.cjs"
+    create: true
+    owner: mastodon
+    group: mastodon
+  when: yarn_pkg_version.stdout | trim != ""
+  become: true
+
+- name: Install JavaScript dependencies with Yarn
+  ansible.builtin.command: "node .yarn/releases/yarn-{{ yarn_pkg_version.stdout | trim }}.cjs install --immutable"
+  args:
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    NODE_ENV: production
+  register: yarn_result
+  changed_when: "'Added' in yarn_result.stdout or 'Updated' in yarn_result.stdout"
+  when: yarn_pkg_version.stdout | trim != ""
+
+- name: Install JavaScript dependencies with Yarn (classic fallback)
+  ansible.builtin.command: "yarn install --frozen-lockfile"
+  args:
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    NODE_ENV: production
+  register: yarn_result
+  changed_when: "'Added' in yarn_result.stdout or 'Updated' in yarn_result.stdout"
+  when: yarn_pkg_version.stdout | trim == ""
+
+- name: Check if assets need precompilation
+  ansible.builtin.stat:
+    path: /opt/mastodon/public/assets
+  register: assets_stat
+
+- name: Check if package.json is newer than assets
+  ansible.builtin.stat:
+    path: /opt/mastodon/package.json
+  register: package_json_stat
+
+- name: Precompile Mastodon assets
+  ansible.builtin.command: "bin/rails assets:precompile"
+  args:
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    RAILS_ENV: production
+    NODE_ENV: production
+  when: >
+    not assets_stat.stat.exists or
+    (package_json_stat.stat.mtime > assets_stat.stat.mtime) or
+    yarn_result.changed or
+    bundle_result.changed
+
+- name: Run database migrations
+  ansible.builtin.command: "bin/rails db:migrate"
+  args:
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    RAILS_ENV: production
+  register: migration_result
+  changed_when: "'migrated' in migration_result.stdout"
+
+- name: Check if database is seeded
+  ansible.builtin.command: >
+    bin/rails runner "puts User.count"
+  args:
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    RAILS_ENV: production
+  register: user_count
+  changed_when: false
+  failed_when: false
+
+- name: Seed database on first installation
+  ansible.builtin.command: "bin/rails db:seed"
+  args:
+    chdir: /opt/mastodon
+  become_user: mastodon
+  environment:
+    RAILS_ENV: production
+  when: user_count.rc != 0 or user_count.stdout == "0"

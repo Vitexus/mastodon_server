@@ -1,0 +1,39 @@
+# ======================== Elasticsearch Configuration =========================
+#
+# Configuration for Mastodon deployment with Java 21
+# This configuration is optimized for single-node Elasticsearch with Mastodon
+#
+# ---------------------------------- Cluster -----------------------------------
+cluster.name: mastodon
+node.name: mastodon-node-1
+
+# ----------------------------------- Paths ------------------------------------
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+
+# ---------------------------------- Network -----------------------------------
+network.host: localhost
+http.port: 9200
+
+# --------------------------------- Discovery ----------------------------------
+discovery.type: single-node
+
+# ---------------------------------- Security ----------------------------------
+# Disable X-Pack security for simple local setup
+xpack.security.enabled: false
+xpack.ml.enabled: false
+xpack.graph.enabled: false
+xpack.watcher.enabled: false
+xpack.monitoring.enabled: false
+
+# ---------------------------------- Performance ----------------------------------
+# Memory settings
+indices.memory.index_buffer_size: 10%
+bootstrap.memory_lock: false
+
+# ---------------------------------- Java 21 Compatibility ----------------------------------
+# Ensure compatibility with Java 21
+action.destructive_requires_name: true
+
+# ---------------------------------- Logging ----------------------------------
+logger.org.elasticsearch.deprecation: warn

@@ -1,0 +1,177 @@
+# Apache Virtual Host for Mastodon {{ mastodon_domain }}
+<VirtualHost *:80>
+    ServerName {{ mastodon_domain }}
+    DocumentRoot /opt/mastodon/public
+
+    <Directory /opt/mastodon/public>
+        Options FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    # Set limits
+    LimitRequestBody 104857600
+
+    # Proxy configuration - MUST come before LocationMatch directives
+    ProxyPreserveHost On
+    
+    # Exception for static files - don't proxy these
+    ProxyPass /assets !
+    ProxyPass /avatars !
+    ProxyPass /emoji !
+    ProxyPass /headers !
+    ProxyPass /packs !
+    ProxyPass /shortcuts !
+    ProxyPass /sounds !
+    ProxyPass /system !
+    ProxyPass /sw.js !
+    
+    # Streaming API proxy (http:// with upgrade=websocket handles both HTTP and WS)
+    ProxyPass /api/v1/streaming http://127.0.0.1:4000/api/v1/streaming upgrade=websocket connectiontimeout=5 timeout=86400
+    ProxyPassReverse /api/v1/streaming http://127.0.0.1:4000/api/v1/streaming
+    
+    # Main application proxy for everything else
+    ProxyPass / http://127.0.0.1:{{ mastodon_port }}/ connectiontimeout=5 timeout=30 keepalive=Off
+    ProxyPassReverse / http://127.0.0.1:{{ mastodon_port }}/
+    
+    # Forward real IP and protocol info
+    RequestHeader set X-Forwarded-Proto "http"
+    RequestHeader set X-Forwarded-For %{REMOTE_ADDR}s
+    RequestHeader set X-Real-IP %{REMOTE_ADDR}s
+
+    # Static asset handling with caching
+    <LocationMatch "^/(assets|avatars|emoji|headers|packs|shortcuts|sounds)/.*">
+        Header always set Cache-Control "public, max-age=2419200, must-revalidate"
+        Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+    </LocationMatch>
+
+    # Service worker special handling
+    <Location "/sw.js">
+        Header always set Cache-Control "public, max-age=604800, must-revalidate"
+        Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+    </Location>
+
+    # System files (uploads) with strict security headers
+    <LocationMatch "^/system">
+        Header always set Cache-Control "public, max-age=2419200, immutable"
+        Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+        Header always set X-Content-Type-Options "nosniff"
+        Header always set Content-Security-Policy "default-src 'none'; form-action 'none'"
+    </LocationMatch>
+
+    # Streaming API headers
+    <Location "/api/v1/streaming">
+        # Headers for streaming
+        SetEnv proxy-nokeepalive 1
+        SetEnv proxy-initial-not-pooled 1
+        Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+    </Location>
+
+    # Error pages
+    ErrorDocument 404 /500.html
+    ErrorDocument 500 /500.html
+    ErrorDocument 501 /500.html
+    ErrorDocument 502 /500.html
+    ErrorDocument 503 /500.html
+    ErrorDocument 504 /500.html
+
+    # Logging
+    ErrorLog ${APACHE_LOG_DIR}/{{ mastodon_domain }}_error.log
+    CustomLog ${APACHE_LOG_DIR}/{{ mastodon_domain }}_access.log combined
+</VirtualHost>
+
+# HTTPS Virtual Host (when SSL is configured)
+{% if mastodon_enable_ssl | default(false) %}
+<VirtualHost *:443>
+    ServerName {{ mastodon_domain }}
+    DocumentRoot /opt/mastodon/public
+
+    <Directory /opt/mastodon/public>
+        Options FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    # SSL Configuration
+    SSLEngine on
+    SSLCertificateFile {{ mastodon_ssl_cert_path }}
+    SSLCertificateKeyFile {{ mastodon_ssl_key_path }}
+    
+    # SSL Security
+    SSLProtocol all -SSLv3 -TLSv1 -TLSv1.1
+    SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
+    SSLHonorCipherOrder off
+    SSLSessionTickets off
+
+    # Set limits
+    LimitRequestBody 104857600
+
+    # Proxy configuration - MUST come before LocationMatch directives
+    ProxyPreserveHost On
+    
+    # Exception for static files - don't proxy these
+    ProxyPass /assets !
+    ProxyPass /avatars !
+    ProxyPass /emoji !
+    ProxyPass /headers !
+    ProxyPass /packs !
+    ProxyPass /shortcuts !
+    ProxyPass /sounds !
+    ProxyPass /system !
+    ProxyPass /sw.js !
+    
+    # Streaming API proxy (http:// with upgrade=websocket handles both HTTP and WS)
+    ProxyPass /api/v1/streaming http://127.0.0.1:4000/api/v1/streaming upgrade=websocket connectiontimeout=5 timeout=86400
+    ProxyPassReverse /api/v1/streaming http://127.0.0.1:4000/api/v1/streaming
+    
+    # Main application proxy for everything else
+    ProxyPass / http://127.0.0.1:{{ mastodon_port }}/ connectiontimeout=5 timeout=30 keepalive=Off
+    ProxyPassReverse / http://127.0.0.1:{{ mastodon_port }}/
+    
+    # Forward real IP and protocol info
+    RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-For %{REMOTE_ADDR}s
+    RequestHeader set X-Real-IP %{REMOTE_ADDR}s
+
+    # Static asset handling with caching
+    <LocationMatch "^/(assets|avatars|emoji|headers|packs|shortcuts|sounds)/.*">
+        Header always set Cache-Control "public, max-age=2419200, must-revalidate"
+        Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+    </LocationMatch>
+
+    # Service worker special handling
+    <Location "/sw.js">
+        Header always set Cache-Control "public, max-age=604800, must-revalidate"
+        Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+    </Location>
+
+    # System files with strict security headers
+    <LocationMatch "^/system">
+        Header always set Cache-Control "public, max-age=2419200, immutable"
+        Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+        Header always set X-Content-Type-Options "nosniff"
+        Header always set Content-Security-Policy "default-src 'none'; form-action 'none'"
+    </LocationMatch>
+
+    # Streaming API headers
+    <Location "/api/v1/streaming">
+        # Headers for streaming
+        SetEnv proxy-nokeepalive 1
+        SetEnv proxy-initial-not-pooled 1
+        Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains"
+    </Location>
+
+    # Error pages
+    ErrorDocument 404 /500.html
+    ErrorDocument 500 /500.html
+    ErrorDocument 501 /500.html
+    ErrorDocument 502 /500.html
+    ErrorDocument 503 /500.html
+    ErrorDocument 504 /500.html
+
+    # Logging
+    ErrorLog ${APACHE_LOG_DIR}/{{ mastodon_domain }}_ssl_error.log
+    CustomLog ${APACHE_LOG_DIR}/{{ mastodon_domain }}_ssl_access.log combined
+</VirtualHost>
+
+{% endif %}
